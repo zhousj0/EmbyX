@@ -209,11 +209,20 @@ public class MainActivity extends BridgeActivity {
         // 1. 保持屏幕常亮
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // 检查并申请 Android 13+ 通知权限 (POST_NOTIFICATIONS)
+        // Collect runtime permissions in one request to avoid overlapping dialogs.
+        java.util.ArrayList<String> permissions = new java.util.ArrayList<>();
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+                permissions.add(android.Manifest.permission.POST_NOTIFICATIONS);
             }
+        }
+        // Use the string name so this remains buildable with compileSdk 36.
+        if (android.os.Build.VERSION.SDK_INT >= 37 &&
+                checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            permissions.add("android.permission.ACCESS_LOCAL_NETWORK");
+        }
+        if (!permissions.isEmpty()) {
+            requestPermissions(permissions.toArray(new String[0]), 101);
         }
 
         // 2. 注册原生侧滑/物理返回键手势拦截调度器 (Predictive Back Support)
@@ -272,6 +281,30 @@ public class MainActivity extends BridgeActivity {
                                 }
                             } catch (Exception e) {}
                         }
+                    });
+                }
+
+                private int orientationBeforeSmartFullscreen;
+                private boolean smartFullscreenActive = false;
+
+                @JavascriptInterface
+                public void setSmartFullscreenOrientation(final String direction) {
+                    MainActivity.this.runOnUiThread(() -> {
+                        if ("restore".equals(direction)) {
+                            if (smartFullscreenActive) {
+                                MainActivity.this.setRequestedOrientation(orientationBeforeSmartFullscreen);
+                                smartFullscreenActive = false;
+                            }
+                            return;
+                        }
+                        if (!"portrait".equals(direction) && !"landscape".equals(direction)) return;
+                        if (!smartFullscreenActive) {
+                            orientationBeforeSmartFullscreen = MainActivity.this.getRequestedOrientation();
+                            smartFullscreenActive = true;
+                        }
+                        MainActivity.this.setRequestedOrientation("landscape".equals(direction)
+                            ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
                     });
                 }
 

@@ -181,6 +181,7 @@
         }
 
         switchSlide(newIndex, direction) {
+            this._cancelGesture?.();
             const slideIdx = (this.app.state.currentIndex % 3 + 3) % 3;
             const curV = document.getElementById(`video-p${slideIdx}`);
             if (curV) {
@@ -229,7 +230,7 @@
             if (!container) return;
             this._gesturesBound = true;
 
-            let state = 'IDLE'; // IDLE, SPEED, DRAG
+            let state = 'IDLE'; // IDLE, SPEED, DRAG, VERTICAL
             let x0 = 0, y0 = 0, t0 = 0;
             let longPressTimer = null;
             let clickTimer = null;
@@ -256,13 +257,31 @@
                 }
             }
 
+            let speedVideo = null;
+            let savedPlaybackRate = 1;
             const resetSpeed = () => {
                 clearTimeout(longPressTimer);
                 if (speedToast) speedToast.classList.add('opacity-0');
-                const slideIdx = (this.app.state.currentIndex % 3 + 3) % 3;
-                const v = document.getElementById(`video-p${slideIdx}`);
-                if (v && v.playbackRate !== 1.0) v.playbackRate = 1.0;
+                if (speedVideo) {
+                    speedVideo.playbackRate = savedPlaybackRate;
+                    speedVideo = null;
+                }
             };
+
+            const cancelGesture = () => {
+                gestureActive = false;
+                state = 'IDLE';
+                resetSpeed();
+                clearTimeout(clickTimer);
+                clickCount = 0;
+                if (this.app) this.app.state.isDragging = false;
+                const progressEl = document.getElementById('progressLine');
+                if (progressEl) progressEl.style.transition = '';
+                if (this.app?.input?.hideProgressOSD) this.app.input.hideProgressOSD();
+                else if (this.app?.hideProgressOSD) this.app.hideProgressOSD();
+            };
+
+            this._cancelGesture = cancelGesture;
 
             const isExcluded = (target) => {
                 const excluded = [
@@ -276,6 +295,7 @@
                     '#personBtn',
                     '#castBtn',
                     '#fullscreenBtn',
+                    '#smartFullscreenBtn',
                     '#deleteBtn',
                     'header',
                     '.safe-header',
@@ -315,7 +335,11 @@
                 longPressTimer = setTimeout(() => {
                     if (state === 'IDLE' && gestureActive && (!this.app.isAnyModalOpen || !this.app.isAnyModalOpen())) {
                         state = 'SPEED';
-                        if (v) v.playbackRate = 2.0;
+                        if (v) {
+                            speedVideo = v;
+                            savedPlaybackRate = v.playbackRate;
+                            v.playbackRate = 2.0;
+                        }
                         if (speedToast) speedToast.classList.remove('opacity-0');
                     }
                 }, 300);
@@ -330,15 +354,11 @@
                 const diffX = t.clientX - x0;
                 const diffY = t.clientY - y0;
 
-                if (Math.abs(diffX) > Math.abs(diffY)) {
-                    if (e.cancelable) e.preventDefault();
-                }
-
-                if (Math.abs(diffX) > 15 || Math.abs(diffY) > 15) {
+                if ((state === 'IDLE' || state === 'SPEED') && (Math.abs(diffX) > 15 || Math.abs(diffY) > 15)) {
                     clearTimeout(longPressTimer);
                     if (state === 'SPEED') resetSpeed();
-                    if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 15) {
-                        state = 'DRAG';
+                    state = Math.abs(diffX) > Math.abs(diffY) ? 'DRAG' : 'VERTICAL';
+                    if (state === 'DRAG') {
                         if (this.app) this.app.state.isDragging = true;
                         const progressEl = document.getElementById('progressLine');
                         if (progressEl) progressEl.style.transition = 'none';
@@ -367,13 +387,7 @@
 
             const endHandler = (e) => {
                 if (!gestureActive || this.app.state.viewMode !== 'stream') {
-                    resetSpeed();
-                    if (this.app) this.app.state.isDragging = false;
-                    if (this.app?.input && typeof this.app.input.hideProgressOSD === 'function') {
-                        this.app.input.hideProgressOSD();
-                    } else if (typeof this.app.hideProgressOSD === 'function') {
-                        this.app.hideProgressOSD();
-                    }
+                    cancelGesture();
                     return;
                 }
                 gestureActive = false;
@@ -404,13 +418,14 @@
                     return;
                 }
 
+                const wasVertical = state === 'VERTICAL';
                 state = 'IDLE';
                 const t = e.changedTouches ? e.changedTouches[0] : e;
                 const diffX = t.clientX - x0;
                 const diffY = t.clientY - y0;
                 const time = Date.now() - t0;
 
-                if (Math.abs(diffY) > 50 && Math.abs(diffY) > Math.abs(diffX)) {
+                if (wasVertical && Math.abs(diffY) > 50) {
                     diffY < 0 ? this.app.nextVideo() : this.app.prevVideo();
                     return;
                 }
@@ -457,10 +472,10 @@
                 lastTouchEnd = Date.now();
                 endHandler(e);
             });
-            container.addEventListener('touchcancel', () => { 
-                gestureActive = false; 
-                state = 'IDLE'; 
-                resetSpeed();
+            container.addEventListener('touchcancel', cancelGesture);
+            window.addEventListener('blur', cancelGesture);
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) cancelGesture();
             });
 
             let isMouseDown = false;

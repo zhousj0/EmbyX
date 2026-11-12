@@ -38,8 +38,73 @@
         /**
          * Check if folder/drama drilldown mode should be active
          */
+        isDirectoryMode() {
+            return !!this.app?.config?.folderMode;
+        }
+
+        restoreFolderListing() {
+            if (!this._folderPlayback) return;
+            Object.assign(this.app.state, this._folderPlayback);
+            this._folderPlayback = null;
+        }
+
+        async playFolderItem(item) {
+            if (!item || this._loadingFolderPlayback) return;
+            const app = this.app;
+            const folderId = this.currentFolderId || app.state.currentLibraryId;
+            const requestId = this._folderLoadId || 0;
+            this._loadingFolderPlayback = true;
+            app.toggleLoading(true);
+            try {
+                const videos = [];
+                const limit = 150;
+                for (let offset = 0; ; offset += limit) {
+                    let data;
+                    if (window.EmbyXCommon.getServerType() === 'openlist') {
+                        data = await window.OpenListManager.fetchItems({ path: folderId, startIndex: offset, limit, isFolderMode: true });
+                    } else {
+                        const { server, userId, token } = app.config;
+                        const url = `${server}/emby/Users/${userId}/Items?ParentId=${encodeURIComponent(folderId)}&Recursive=false&IncludeItemTypes=Movie,Episode,Video,MusicVideo&SortBy=SortName&SortOrder=Ascending&StartIndex=${offset}&Limit=${limit}&Fields=MediaSources,Path,RunTimeTicks,SeriesName,IndexNumber,ParentIndexNumber`;
+                        const res = await fetch(url, { headers: app.getAuthHeaders(token) });
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        data = await res.json();
+                    }
+                    if ((this._folderLoadId || 0) !== requestId || app.state.viewMode !== 'grid') return;
+                    const batch = data.Items || [];
+                    videos.push(...batch.filter(v => !v.IsFolder && !['Folder', 'Series', 'Season', 'Photo', 'PhotoAlbum'].includes(v.Type) && v.MediaType !== 'Photo'));
+                    if (typeof data.TotalRecordCount === 'number' ? offset + limit >= data.TotalRecordCount : batch.length < limit) break;
+                }
+                videos.sort((a, b) => (a.Name || '').localeCompare(b.Name || '', undefined, { numeric: true }));
+                const index = videos.findIndex(v => String(v.Id) === String(item.Id));
+                if (index < 0) throw new Error('Video is no longer in this folder');
+                this._folderPlayback = {
+                    videos: app.state.videos, totalCount: app.state.totalCount,
+                    currentIndex: Math.max(0, app.state.videos.findIndex(v => String(v.Id) === String(item.Id))), startIndex: app.state.startIndex,
+                    originalVideos: app.state.originalVideos
+                };
+                app.state.videos = videos;
+                app.state.originalVideos = null;
+                app.state.totalCount = videos.length;
+                app.state.startIndex = 0;
+                app.state.currentIndex = index;
+                if (app.state.playMode === 'random') {
+                    app.state.originalVideos = [...videos];
+                    // Start with the selected item, then shuffle the whole remaining folder.
+                    [videos[0], videos[index]] = [videos[index], videos[0]];
+                    app.state.currentIndex = 0;
+                    app._shuffleAroundCurrent();
+                }
+                app.toggleViewMode();
+            } catch (e) {
+                app.showToast(e.message || 'Unable to load folder');
+            } finally {
+                this._loadingFolderPlayback = false;
+                app.toggleLoading(false);
+            }
+        }
+
         isFolderModeActive() {
-            return this.isDramaMode() &&
+            return (this.isDirectoryMode() || this.isDramaMode()) &&
                 !this.app?.state?.searchTerm &&
                 !this.app?.state?.currentTag &&
                 !this.app?.state?.currentPerson &&
@@ -57,6 +122,7 @@
             if (targetFolderId && targetFolderId !== 'favorites') {
                 url += `&ParentId=${targetFolderId}`;
             }
+            if (this.isDirectoryMode()) url += '&SortBy=SortName&SortOrder=Ascending';
             return url;
         }
 
@@ -77,7 +143,7 @@
          * Check if item is a single-video folder (e.g. standalone movie in its own folder)
          */
         isSingleVideoFolder(item) {
-            if (!item) return false;
+            if (!item || this.isDirectoryMode()) return false;
             const isFolder = item.IsFolder || item.Type === 'Folder';
             if (!isFolder || item.Type === 'Series' || item.Type === 'Season') return false;
             const count = item.ChildCount ?? item.RecursiveItemCount;
@@ -138,6 +204,7 @@
             if (!Array.isArray(items)) return [];
             return [...items].sort((a, b) => {
                 const getTier = (item) => {
+                    if (this.isDirectoryMode()) return (item.IsFolder || ['Folder', 'Series', 'Season'].includes(item.Type)) ? 1 : 3;
                     if (item.Type === 'Series') return 1;
                     const isFolder = item.IsFolder || item.Type === 'Folder';
                     if (isFolder && item.Type !== 'Season') {
@@ -273,6 +340,14 @@
          */
         async enterItem(item) {
             if (!this.app || !item) return;
+            if (this.isDirectoryMode() && this.isFolderModeActive()) {
+                if (item.IsFolder || ['Folder', 'Series', 'Season'].includes(item.Type)) {
+                    this.pushFolder(item.Id, item.Name, item.Type);
+                } else {
+                    await this.playFolderItem(item);
+                }
+                return;
+            }
 
             // Branch 1: Series
             if (item.Type === 'Series') {
@@ -496,6 +571,7 @@
          * Drill down into folder
          */
         async pushFolder(folderId, folderName, type = 'Folder', startIndex = 0) {
+            this._folderLoadId = (this._folderLoadId || 0) + 1;
             if (!this.app) return;
             const parentId = this.currentFolderId || this.app.state.currentLibraryId;
             const parentName = this.currentFolderName || 'Root';
@@ -524,6 +600,7 @@
          * Return to parent level (strictly 1-step back)
          */
         popFolder() {
+            this._folderLoadId = (this._folderLoadId || 0) + 1;
             if (this.app?.input && this.app.input.hasHistoryLayer('folder') && !this.app.input._isHandlingPop) {
                 window.history.back();
                 return true;
@@ -538,6 +615,8 @@
                 this.currentFolderId = (prev.id === this.app.state.currentLibraryId) ? null : prev.id;
                 this.currentFolderName = (prev.name === 'Root') ? '' : prev.name;
                 this.currentFolderType = prev.type || '';
+                this.app.state.startIndex = prev.startIndex || 0;
+                this.app.state.currentIndex = prev.currentIndex || 0;
                 this.app.state.videos = prev.videos;
                 this.app.state.totalCount = prev.totalCount || prev.videos.length;
                 this.app.state.startIndex = prev.startIndex || 0;
@@ -571,6 +650,8 @@
          * Reset folder navigation stack
          */
         reset() {
+            this._folderLoadId = (this._folderLoadId || 0) + 1;
+            this._folderPlayback = null;
             this.folderStack = [];
             this.currentFolderId = null;
             this.currentFolderName = '';
@@ -822,7 +903,7 @@
          * seamlessly fetch and append the next sibling in the same library.
          */
         async loadNextSiblingRelay() {
-            if (!this.app || !this.isDramaMode() || !this.activePlayingFolderId) return false;
+            if (!this.app || this.isDirectoryMode() || !this.isDramaMode() || !this.activePlayingFolderId) return false;
             if (!this.rootSiblings || !this.rootSiblings.length) return false;
 
             const app = this.app;

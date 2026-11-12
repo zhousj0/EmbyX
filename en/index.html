@@ -39,6 +39,7 @@
     <script src="js/cast.js"></script>
     <script src="js/native-media.js"></script>
     <script src="js/stage.js"></script>
+    <script src="js/smart-fullscreen.js"></script>
     <script data-cfasync="false">
         tailwind.config = {
             theme: {
@@ -96,6 +97,7 @@
             .interface-hidden .bottom-info:not(.show-progress),
             .interface-hidden .bottom-nav,
             .interface-hidden .right-toolbar,
+            .interface-hidden #smartFullscreenBtn,
             .interface-hidden #fullscreenBtn,
             .interface-hidden #castBtn,
             .interface-hidden #deleteBtn {
@@ -113,6 +115,7 @@
             /* 格子视图下的特殊“清屏”：保留底部栏，隐藏播放器相关 UI */
             .grid-active .bottom-info,
             .grid-active .right-toolbar,
+            .grid-active #smartFullscreenBtn,
             .grid-active #fullscreenBtn,
             .grid-active #castBtn,
             .grid-active #deleteBtn {
@@ -123,6 +126,7 @@
             body.pip-active .bottom-info,
             body.pip-active .bottom-nav,
             body.pip-active .right-toolbar,
+            body.pip-active #smartFullscreenBtn,
             body.pip-active #fullscreenBtn,
             body.pip-active #castBtn,
             body.pip-active #deleteBtn,
@@ -135,6 +139,7 @@
             /* 仅在 iOS PWA (主屏幕应用状态栏常驻) 下向下避让状态栏 */
             .ios-pwa #deleteBtn,
             .ios-pwa #castBtn,
+            .ios-pwa #smartFullscreenBtn,
             .ios-pwa #fullscreenBtn {
                 top: calc(10px + env(safe-area-inset-top)) !important;
             }
@@ -244,7 +249,43 @@
 
         /* 顶部安全区：默认 0（安卓 PWA/APK 已申请全屏，无需避让）；仅 iOS PWA 状态栏常驻时下移，
            与 #castBtn / #fullscreenBtn 的处理保持一致 */
-        :root { --safe-top: 0px; }
+        :root {
+            --safe-top: 0px;
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-left: env(safe-area-inset-left, 0px);
+            --safe-right: env(safe-area-inset-right, 0px);
+            --bottom-nav-height: calc(3rem + 0.75rem + 1px + var(--safe-bottom));
+        }
+        .bottom-nav {
+            box-sizing: border-box;
+            height: var(--bottom-nav-height);
+            padding-bottom: calc(0.5rem + var(--safe-bottom));
+            padding-left: var(--safe-left);
+            padding-right: var(--safe-right);
+        }
+        /* Hidden metadata must not block seeking gestures, including progress-only OSD. */
+        .interface-hidden #metaInfoContainer,
+        .interface-hidden #metaInfoContainer *,
+        .grid-active #metaInfoContainer,
+        .grid-active #metaInfoContainer * {
+            visibility: hidden;
+            pointer-events: none;
+        }
+        /* Opacity alone leaves the explicitly interactive progress bar hit-testable. */
+        .interface-hidden .bottom-info:not(.show-progress) #progressBarContainer,
+        .grid-active #progressBarContainer {
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .bottom-info {
+            bottom: calc(var(--bottom-nav-height) + 1rem);
+            left: calc(1rem + var(--safe-left));
+            right: calc(1rem + var(--safe-right));
+        }
+        .right-toolbar {
+            bottom: calc(var(--bottom-nav-height) + 4rem);
+            right: calc(1rem + var(--safe-right));
+        }
         .ios-pwa { --safe-top: env(safe-area-inset-top, 0px); }
     </style>
 </head>
@@ -295,7 +336,7 @@
         </div>
 
         <div
-            class="right-toolbar absolute right-4 bottom-32 flex flex-col items-center space-y-6 z-30 transition-opacity duration-300">
+            class="right-toolbar absolute flex flex-col items-center space-y-6 z-30 transition-opacity duration-300">
             <div class="flex flex-col items-center cursor-pointer active:scale-90 transition-all duration-300 hidden"
                 id="personBtn">
                 <div class="w-12 h-12 rounded-full overflow-hidden border-2 border-white/80 bg-black/40 flex items-center justify-center">
@@ -342,7 +383,7 @@
 
 
         <!-- Cast button (left of fullscreen, frosted style) -->
-        <div class="absolute top-4 right-[4.5rem] z-30 transition-opacity duration-300"
+        <div class="absolute top-4 right-[8rem] z-30 transition-opacity duration-300"
             id="castBtn">
             <div
                 class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/25 backdrop-blur-xl border border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25),0_8px_24px_rgba(0,0,0,0.3)] rounded-full" title="Cast">
@@ -358,6 +399,11 @@
                 <i data-lucide="maximize" class="stroke-white w-5 h-5 drop-shadow-md"></i>
             </div>
         </div>
+        <button type="button" id="smartFullscreenBtn" title="Smart fullscreen" aria-label="Smart fullscreen" aria-pressed="false"
+            class="absolute top-4 right-[4.5rem] z-30 w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-opacity duration-300 bg-black/25 backdrop-blur-xl border border-white/10 rounded-full">
+            <i data-lucide="scan" class="w-5 h-5 drop-shadow-md"></i><span class="absolute bottom-0.5 text-[8px]">AUTO</span>
+        </button>
+
 
         <!-- Cast设备选择卡片（EmbyX 统一规范底部悬浮卡片） -->
         <div id="castModal"
@@ -516,7 +562,7 @@
         </div>
 
         <div
-            class="bottom-info absolute bottom-20 left-4 right-4 z-20 transition-opacity duration-300 pointer-events-none">
+            class="bottom-info absolute z-20 transition-opacity duration-300 pointer-events-none">
             <div id="metaInfoContainer" class="mb-3 w-[85%] pr-4 pointer-events-auto transition-all duration-300">
                 <h3 id="videoTitle" class="text-white text-lg font-medium mb-1 drop-shadow-md truncate pointer-events-auto cursor-pointer hover:underline inline-block max-w-full">Initializing...</h3>
                 <div id="videoDescriptionArea" class="pointer-events-auto cursor-pointer transition-all duration-300">
@@ -1078,6 +1124,7 @@
                 });
                 this.stage = null;
                 this.config.deviceName = this.getDeviceName();
+                this.smartFullscreen = new SmartFullscreenController(this);
                 this.init();
             }
 
@@ -1143,8 +1190,8 @@
                 this.loadFavorites();
                 this.initGlobalPlaylistIndex();
 
-                // 短剧先建立目录底层，确权后再恢复播放层
-                if (this.config.shortDrama) {
+                // Short Drama Mode初始视图设为宫格选剧大厅
+                if (this.config.shortDrama || this.config.folderMode) {
                     this.state.viewMode = 'grid';
                     const appEl = document.getElementById('app');
                     if (appEl) appEl.classList.add('grid-active');
@@ -1360,6 +1407,16 @@
 
             // ═══ 核心播放逻辑 ═══
             async fetchVideos(parentId = null, ids = null, isLoadMore = false, isRandom = false, isAppend = false, searchTerm = '') {
+                if (isAppend && this.drama?._folderPlayback) return;
+                const requestId = this._videoListRequestId = (this._videoListRequestId || 0) + 1;
+                const queryContext = () => JSON.stringify([
+                    this.config.server, this.config.token, this.state.currentLibraryId,
+                    this.state.currentLibraryType, this.drama?.currentFolderId,
+                    this.state.searchTerm, this.state.currentTag, this.state.currentPerson,
+                    this.config.folderMode, this.config.shortDrama
+                ]);
+                const context = queryContext();
+                const isCurrentRequest = () => requestId === this._videoListRequestId && context === queryContext();
                 this.toggleLoading(!isAppend); // 追加时不显示Fullscreen loading
                 try {
                     const { server, token, userId } = this.config;
@@ -1452,6 +1509,7 @@
                         }
                         data = await res.json();
                     }
+                    if (!isCurrentRequest()) return;
                     let items = data.Items || [];
                     // 严格过滤图片文件（图片由专门的 pic.html 负责展示，主视频页绝不混入图片）
                     items = items.filter(item => item && item.Type !== 'Photo' && item.MediaType !== 'Photo' && item.Type !== 'PhotoAlbum');
@@ -1490,7 +1548,7 @@
                         this.showToast('No videos found');
                         if (isOpenList && !searchTerm && !isAppend) {
                             setTimeout(() => {
-                                this.showLibraries();
+                                if (isCurrentRequest()) this.showLibraries();
                             }, 500);
                         }
                     }
@@ -1519,7 +1577,7 @@
                             this.renderSlides();
                             this.loadVideo(this.state.currentIndex);
                             if (isDramaMode) {
-                                setTimeout(() => this.checkCloudSync(), 1500);
+                                setTimeout(() => { if (isCurrentRequest()) this.checkCloudSync(); }, 1500);
                             }
                         } else {
                             this.renderGridView(); // 瀑布流播放模式下无搜索结果时，退回网格视图展示 0 统计
@@ -1527,11 +1585,12 @@
                     }
                     return true;
                 } catch (e) {
+                    if (!isCurrentRequest()) return;
                     console.error('Failed to fetch videos:', e);
                     this.showToast('Cannot connect to server: ' + (e.message || '未知错误'));
                     return false;
                 } finally {
-                    this.toggleLoading(false);
+                    if (requestId === this._videoListRequestId) this.toggleLoading(false);
                 }
             }
 
@@ -1551,6 +1610,7 @@
 
             // ═══ 宫格视图（委托至 GridViewManager） ═══
             renderGridView() {
+                if (this.smartFullscreen?.active) this.smartFullscreen.exit();
                 this.grid.render();
             }
             // ═══ 缓冲与播放控制（委托至 Player & Stage 引擎） ═══
@@ -1827,6 +1887,10 @@
                 favDiv.className = `focusable-item col-span-1 p-2.5 rounded-xl cursor-pointer text-sm flex items-center gap-2 ${isFavSelected ? 'bg-primary/20 text-primary font-bold border border-primary/40' : 'bg-white/10 text-gray-200 hover:bg-white/15 border border-white/5'}`;
                 favDiv.innerHTML = `<i data-lucide="${isFavSelected ? 'check-circle' : 'folder-heart'}" class="w-4 h-4 flex-shrink-0"></i><span class="flex-1 truncate">Favorites</span>`;
                 favDiv.onclick = () => {
+                    this.state.searchTerm = '';
+                    this.state.currentTag = null;
+                    this.state.isFilteredByTag = false;
+                    this.state.preSearchState = null;
                     this.stopCurrentPlayback();
                     this.state.currentPerson = null;
                     this.state.isFilteredByPerson = false;
@@ -1836,12 +1900,8 @@
                     localStorage.setItem('emby_lib_type', 'favorites');
                     this.state.currentTab = 'home';
                     this.updateTabHighlight();
-                    if (this.state.favorites.size === 0) {
-                        this.showToast('No favorites');
-                        return;
-                    }
                     this.state.startIndex = 0;
-                    this.fetchVideos(null, Array.from(this.state.favorites).join(','));
+                    this.fetchVideos();
                     this.toggleModal('libraryModal', false);
                 };
                 list.appendChild(favDiv);
@@ -2582,6 +2642,10 @@
 
             toggleViewMode() {
                 const isStream = this.state.viewMode === 'stream';
+                if (!isStream && this.drama?.isDirectoryMode() && this.drama.isFolderModeActive() && !this.drama._folderPlayback) {
+                    this.drama.enterItem(this.state.videos[this.state.currentIndex]);
+                    return;
+                }
                 if (isStream) this.player.savePlaybackProgress(null, true);
 
                 if (isStream && (this.state.isFilteredByPerson || this.state.isFilteredByTag)) {
@@ -2601,6 +2665,8 @@
                 this.setViewMode(isStream ? 'grid' : 'stream');
 
                 if (this.state.viewMode === 'grid') {
+                    if (this.smartFullscreen?.active) this.smartFullscreen.exit();
+                    this.drama?.restoreFolderListing();
                     // 如果在Short Drama Mode且在根目录，但当前 videos 是分集列表，恢复大厅根级剧目
                     if (this.drama && this.drama.isDramaMode() && this.drama.folderStack.length === 0 && this.drama.rootSiblings.length > 0) {
                         if (this.state.videos.length > 0 && this.state.videos[0].Type === 'Episode') {

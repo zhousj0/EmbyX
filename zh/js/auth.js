@@ -36,6 +36,7 @@
             }
             app.config.autoplay = localStorage.getItem(this.keyPrefix + '_autoplay') !== 'false';
             if (app.dom.configShortDrama) app.config.shortDrama = localStorage.getItem('emby_shortdrama') === 'true';
+            app.config.folderMode = localStorage.getItem('embyx_folder_mode') === 'true';
             app.config.deleteMode = localStorage.getItem('emby_delete_mode') === 'true';
             app.config.fnOS = localStorage.getItem('emby_fnOS') === 'true';
             app.config.serverId = localStorage.getItem('emby_server_id') || '';

@@ -212,6 +212,7 @@
 
         setVideoSource(videoEl, src, index, item, options = {}) {
             if (!videoEl || !src) return;
+            videoEl._playbackItem = item;
             if (this.app.castManager && this.app.castManager.isCasting) return;
             const sidMatch = /[?&]PlaySessionId=([^&]+)/i.exec(src);
             if (sidMatch) {
@@ -545,9 +546,15 @@
         }
 
         bindVideoEvents(videoEl, index, videoData) {
+            videoEl._playbackItem = videoData;
+            const binding = {};
+            videoEl._eventBinding = binding;
+            const isActive = () => videoEl._eventBinding === binding &&
+                this.isCurrentPlayback(videoEl, videoData?.Id, videoEl.dataset.requestedSrc || videoEl.currentSrc || videoEl.src);
+
             const { server, userId } = this.app.config;
             const libraryId = this.app.state.currentLibraryId;
-            const isCurrent = () => this.app.config.server === server && this.app.config.userId === userId && this.app.state.currentLibraryId === libraryId && this.isCurrentPlayback(videoEl, videoData.Id, videoEl.dataset.requestedSrc);
+            const isCurrent = () => isActive() && this.app.config.server === server && this.app.config.userId === userId && this.app.state.currentLibraryId === libraryId && this.isCurrentPlayback(videoEl, videoData.Id, videoEl.dataset.requestedSrc);
             const resumeReady = () => {
                 if (!isCurrent() || !this.restorePosition(videoEl, videoData.Id)) return;
                 if (videoEl.dataset.pendingPlay === 'true' && videoEl.dataset.hlsLoading !== 'true') {
@@ -594,13 +601,14 @@
             };
 
             videoEl.oncanplay = () => {
+                if (!isCurrent()) return;
                 resumeReady();
                 clearTimeout(this._waitingTimer);
                 this.app.toggleLoading(false);
                 videoEl.style.opacity = '1';
             };
 
-            if (videoEl.readyState >= 3) {
+            if (isCurrent() && videoEl.readyState >= 3) {
                 resumeReady();
                 clearTimeout(this._waitingTimer);
                 this.app.toggleLoading(false);
@@ -651,9 +659,12 @@
         }
 
         reportPlayback(event, videoEl, isKeepAlive = false, force = false) {
-            if (!this.app.config.server || !this.app.config.token || this.app.state.videos.length === 0) return;
-            const videoData = this.app.state.videos[this.app.state.currentIndex];
-            if (!videoData || !videoEl) return;
+            if (!this.app.config.server || !this.app.config.token) return;
+            if (!videoEl) return;
+            const videoData = videoEl._playbackItem;
+            if (!videoData) return;
+            if (event !== 'stopped' && !this.isCurrentPlayback(videoEl, videoData.Id,
+                videoEl.dataset.requestedSrc || videoEl.currentSrc || videoEl.src)) return;
             if (videoData._isOpenList || window.EmbyXCommon?.getServerType() === 'openlist') return;
 
             const now = Date.now();
@@ -707,7 +718,7 @@
             const headers = this.app.getAuthHeaders(this.app.config.token, { 'Content-Type': 'application/json' });
 
             if (eventName === 'Stopped' || event === 'stopped') {
-                this.terminateActiveEncoding(payload.PlaySessionId, isKeepAlive);
+                this.terminateActiveEncoding(payload.PlaySessionId, isKeepAlive, false);
             }
 
             fetch(url, {
@@ -718,7 +729,7 @@
             }).catch(() => {});
         }
 
-        terminateActiveEncoding(playSessionId = null, isKeepAlive = false) {
+        terminateActiveEncoding(playSessionId = null, isKeepAlive = false, reportStopped = true) {
             const server = this.app?.config?.server;
             const token = this.app?.config?.token;
             if (!server || !token) return;
@@ -740,6 +751,7 @@
             }).catch(() => {});
 
             // 2. POST /emby/Sessions/Playing/Stopped (通知注销播放会话)
+            if (!reportStopped) return;
             const stopUrl = fixUrl(`${server}/emby/Sessions/Playing/Stopped?api_key=${token}`);
             fetch(stopUrl, {
                 method: 'POST',

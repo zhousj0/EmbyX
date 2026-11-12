@@ -261,7 +261,6 @@
                 try {
                     const isOpenList = await window.OpenListManager.detect(targetServer);
                     if (isOpenList) {
-                        setServerType('openlist');
                         const openListAuth = await window.OpenListManager.authenticate({ server: targetServer, user, pwd });
                         return {
                             data: { AccessToken: openListAuth.token, ServerId: openListAuth.serverId },
@@ -277,10 +276,7 @@
                 }
             }
 
-            setServerType(serverType);
-            if (serverType === 'jellyfin') {
-                enableJellyfinFetchProxy();
-            }
+            // Keep detection local until AuthManager commits a successful login.
 
             const authHeader = buildAuthHeader({ client: 'EmbyX', deviceName, deviceId, appVersion });
             const headers = {

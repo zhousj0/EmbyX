@@ -1,5 +1,7 @@
 .DS_Store
 node_modules/
+.build-tools/
+dist/
 __pycache__/
 android/
 strm_out/

@@ -140,7 +140,7 @@
                 <span class="text-sm font-bold text-gray-200 truncate max-w-[40%] flex items-center">${libraryName}</span>
                 <span class="text-xs font-bold text-primary/70 tabular-nums flex items-center">
                     ${countStr}
-                    ${!app.drama?.isDramaMode() ? `
+                    ${!app.drama?.isDramaMode() && !app.config.folderMode ? `
                     <span class="w-1.5"></span>
                     <button id="gridShuffleBtn" title="随机换一批" class="active:scale-90 transition-transform p-[2px] bg-white/10 rounded-full hover:bg-white/20 flex items-center justify-center">
                         <i data-lucide="sparkles" class="w-3.5 h-3.5 text-white"></i>
@@ -157,6 +157,26 @@
                 <button id="gridNextBtn" class="px-1.5 py-0.5 rounded text-xs flex items-center justify-center ${currentPage >= totalPages ? 'text-gray-600 pointer-events-none' : 'text-gray-300 active:scale-90 hover:text-white transition-colors'}">❯</button>
             `;
 
+            const folderToggle = document.createElement('button');
+            folderToggle.id = 'gridFolderModeBtn';
+            folderToggle.className = 'px-2 py-1 text-xs rounded bg-white/10 text-primary whitespace-nowrap';
+            folderToggle.textContent = app.config.folderMode ? '文件夹' : '全部';
+            folderToggle.title = '切换全部媒体 / 文件夹浏览';
+            folderToggle.disabled = app.state.currentLibraryId === 'favorites';
+            folderToggle.onclick = () => {
+                app.config.folderMode = !app.config.folderMode;
+                localStorage.setItem('embyx_folder_mode', String(app.config.folderMode));
+                app.drama?.reset();
+                app.state.searchTerm = '';
+                app.state.currentPerson = null;
+                app.state.currentTag = null;
+                app.state.isFilteredByPerson = false;
+                app.state.isFilteredByTag = false;
+                app.state.preSearchState = null;
+                app.state.startIndex = 0;
+                app.fetchVideos();
+            };
+            headerNav.insertBefore(folderToggle, headerNav.firstChild);
             safeHeader.innerHTML = '';
             safeHeader.appendChild(headerNav);
             safeHeader.appendChild(searchBar);
@@ -312,6 +332,10 @@
                 // ═══ 分支 2: 普通单集视频卡片 / 单片电影 ═══
                 else {
                     el.onclick = () => {
+                        if (app.drama?.isDirectoryMode() && app.drama.isFolderModeActive()) {
+                            app.drama.enterItem(item);
+                            return;
+                        }
                         // 若是单视频电影文件夹，穿透套娃直接起播
                         if (isSingleMovie) {
                             if (app.drama) {

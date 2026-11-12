@@ -723,6 +723,10 @@
          * 返回 true 表示由前端消费了返回行为；返回 false 表示已处于根界面
          */
         static handleNativeBack() {
+            if (window.app?.smartFullscreen?.active) {
+                window.app.smartFullscreen.exit();
+                return true;
+            }
             if (window.app && window.app.input) {
                 return window.app.input.handlePopState();
             }
