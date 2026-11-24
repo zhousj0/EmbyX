@@ -5,7 +5,7 @@
  * - Hls.js & mpegts.js integration
  * - iOS WebKit audio policies & stream copy (fMP4/hvc1)
  * - Adaptive fallback: DirectPlay -> DirectStream -> Transcode
- * - Playback progress debounced reporting to Emby / Jellyfin / fnOS
+ * - Local resume positions and debounced progress reporting to Emby / Jellyfin / fnOS
  */
 (function (window) {
     'use strict';
@@ -210,21 +210,61 @@
             return fixUrl(`${server}/emby/Videos/${targetVideoId}/stream?${params}`);
         }
 
+        playbackProgressKey(item) {
+            const { server, serverId, userId, user } = this.app.config;
+            const account = item?._isOpenList ? (user || userId) : (userId || user);
+            if (!(serverId || server) || !account || item?.Id == null) return null;
+            return `embyx_playback_resume_${JSON.stringify([serverId || server, account, String(item.Id)])}`;
+        }
+
+        getResumePosition(item, consumeDrama = false) {
+            const drama = this.app.drama;
+            const isDramaMode = drama?.isDramaMode();
+            const hasPendingDramaPosition = isDramaMode && drama.pendingResume?.itemId === String(item.Id);
+            const dramaPosition = isDramaMode ? drama.getResumePosition(item.Id, consumeDrama, null) : null;
+            if (hasPendingDramaPosition && dramaPosition !== null) return dramaPosition;
+
+            const key = this.playbackProgressKey(item);
+            if (key) {
+                try {
+                    const saved = localStorage.getItem(key);
+                    const position = Number(saved);
+                    if (saved !== null && Number.isFinite(position) && position >= 0) return position;
+                } catch {
+                    // Continue with any progress available from the media library.
+                }
+            }
+
+            const serverPosition = Number(item.UserData?.PlaybackPositionTicks) / 10000000;
+            return dramaPosition ?? (Number.isFinite(serverPosition) && serverPosition > 0 ? serverPosition : 0);
+        }
+
         setVideoSource(videoEl, src, index, item, options = {}) {
             if (!videoEl || !src) return;
+            const progressKey = this.playbackProgressKey(item);
+            const isSameItem = progressKey !== null && videoEl._playbackProgressKey === progressKey;
             videoEl._playbackItem = item;
             if (this.app.castManager && this.app.castManager.isCasting) return;
+            videoEl._playbackProgressKey = progressKey;
             const sidMatch = /[?&]PlaySessionId=([^&]+)/i.exec(src);
             if (sidMatch) {
                 videoEl.dataset.playSessionId = decodeURIComponent(sidMatch[1]);
             }
             const { preloadOnly = false, autoplay = false, forceHls = false, live = false, resumeTime: requestedResumeTime } = options;
-            const resumeTime = Number.isFinite(requestedResumeTime) ? requestedResumeTime : (!preloadOnly && this.app.drama?.isDramaMode() ? (Number(videoEl.dataset.resumeTarget) || videoEl.currentTime || this.app.drama.getResumePosition(item.Id, false) || 0) : 0);
-            if (resumeTime > 0 && !preloadOnly) {
+            let resumeTime = 0;
+            if (!preloadOnly && !live) {
+                const pendingPosition = isSameItem ? Number(videoEl.dataset.resumeTarget) : NaN;
+                const hasStarted = isSameItem && videoEl.dataset.playbackStarted === String(item.Id);
+                if (Number.isFinite(requestedResumeTime)) resumeTime = requestedResumeTime;
+                else if (Number.isFinite(pendingPosition)) resumeTime = pendingPosition;
+                else if (hasStarted && Number.isFinite(videoEl.currentTime)) resumeTime = videoEl.ended ? 0 : videoEl.currentTime;
+                else resumeTime = this.getResumePosition(item);
+            }
+            if (resumeTime > 0) {
                 videoEl.dataset.resumeTime = String(resumeTime);
                 videoEl.dataset.resumeTarget = String(resumeTime);
                 videoEl.dataset.resumeItemId = String(item.Id);
-            } else if (Number.isFinite(resumeTime) || preloadOnly || videoEl.dataset.resumeItemId !== String(item.Id)) {
+            } else {
                 delete videoEl.dataset.resumeTime;
                 delete videoEl.dataset.resumeTarget;
                 delete videoEl.dataset.resumeItemId;
@@ -334,8 +374,14 @@
             if (videoEl.dataset.resumeItemId !== String(videoId) || videoEl.readyState < 1) return false;
             const position = Number(videoEl.dataset.resumeTime);
             const duration = videoEl.duration;
-            if (!Number.isFinite(position) || position < 0 || duration === 0) return false;
-            const target = Number.isFinite(duration) ? Math.min(position, Math.max(0, duration - 0.25)) : position;
+            if (duration === Infinity) {
+                delete videoEl.dataset.resumeTime;
+                delete videoEl.dataset.resumeTarget;
+                delete videoEl.dataset.resumeItemId;
+                return true;
+            }
+            if (!Number.isFinite(position) || position < 0 || !Number.isFinite(duration) || duration <= 0) return false;
+            const target = Math.min(position, Math.max(0, duration - 0.25));
             try {
                 videoEl.currentTime = target;
                 videoEl.dataset.resumeTarget = String(target);
@@ -355,6 +401,22 @@
             if (!item || !videoEl || videoEl !== current || videoEl.dataset.resumeTime || videoEl.dataset.resumeTarget || videoEl.seeking) return;
             if (videoEl.dataset.playbackStarted !== String(item.Id) || videoEl.readyState < 1) return;
             if (!this.isCurrentPlayback(videoEl, item.Id, videoEl.dataset.requestedSrc)) return;
+            const key = this.playbackProgressKey(item);
+            if (key !== videoEl._playbackProgressKey) return;
+
+            const { currentTime, duration, ended } = videoEl;
+            if (key && Number.isFinite(duration) && duration > 0 && Number.isFinite(currentTime) && currentTime >= 0) {
+                const now = Date.now();
+                const previous = this._lastProgressSave;
+                if (force || ended || previous?.key !== key || now - previous.time >= 5000) {
+                    try {
+                        localStorage.setItem(key, String(ended ? 0 : currentTime));
+                        this._lastProgressSave = { key, time: now };
+                    } catch {
+                        // Short drama progress can still be saved independently.
+                    }
+                }
+            }
             this.app.drama?.savePlaybackProgress(item, videoEl, force);
         }
 
@@ -382,7 +444,7 @@
                     return;
                 }
                 const videoId = this.app.state.videos[this.app.state.currentIndex]?.Id;
-                if (!this.restorePosition(v, videoId)) {
+                if (!this.restorePosition(v, videoId) || (v.dataset.resumeTarget && v.seeking)) {
                     v.dataset.pendingPlay = 'true';
                     return;
                 }
@@ -525,6 +587,10 @@
             if (!v) return;
 
             if (v.paused) {
+                if (v.dataset.resumeTime || v.dataset.resumeTarget || v.dataset.hlsLoading === 'true') {
+                    this.playVideo(this.app.state.currentIndex);
+                    return;
+                }
                 const playPromise = v.play();
                 if (typeof this.app.setPlayState === 'function') this.app.setPlayState(true);
                 else this.app.state.isPlaying = true;
@@ -552,9 +618,11 @@
             const isActive = () => videoEl._eventBinding === binding &&
                 this.isCurrentPlayback(videoEl, videoData?.Id, videoEl.dataset.requestedSrc || videoEl.currentSrc || videoEl.src);
 
-            const { server, userId } = this.app.config;
+            const { server, userId, user } = this.app.config;
             const libraryId = this.app.state.currentLibraryId;
-            const isCurrent = () => isActive() && this.app.config.server === server && this.app.config.userId === userId && this.app.state.currentLibraryId === libraryId && this.isCurrentPlayback(videoEl, videoData.Id, videoEl.dataset.requestedSrc);
+            const isCurrent = () => isActive() && this.app.config.server === server && this.app.config.userId === userId &&
+                this.app.config.user === user && this.app.state.currentLibraryId === libraryId &&
+                this.isCurrentPlayback(videoEl, videoData.Id, videoEl.dataset.requestedSrc);
             const resumeReady = () => {
                 if (!isCurrent() || !this.restorePosition(videoEl, videoData.Id)) return;
                 if (videoEl.dataset.pendingPlay === 'true' && videoEl.dataset.hlsLoading !== 'true') {
@@ -603,17 +671,11 @@
             videoEl.oncanplay = () => {
                 if (!isCurrent()) return;
                 resumeReady();
+                if (videoEl.dataset.resumeTime || videoEl.dataset.resumeTarget) return;
                 clearTimeout(this._waitingTimer);
                 this.app.toggleLoading(false);
                 videoEl.style.opacity = '1';
             };
-
-            if (isCurrent() && videoEl.readyState >= 3) {
-                resumeReady();
-                clearTimeout(this._waitingTimer);
-                this.app.toggleLoading(false);
-                videoEl.style.opacity = '1';
-            }
 
             videoEl.ontimeupdate = () => {
                 if (!isCurrent() || !videoEl.duration) return;
@@ -656,6 +718,8 @@
                 this.app.toggleLoading(false);
                 this.retryWithAltMode(this.app.state.currentIndex, videoData);
             };
+
+            if (videoEl.readyState >= 3) videoEl.oncanplay();
         }
 
         reportPlayback(event, videoEl, isKeepAlive = false, force = false) {

@@ -680,10 +680,10 @@
             }
         }
 
-        getResumePosition(itemId, consume = true) {
+        getResumePosition(itemId, consume = true, fallback = 0) {
             const record = this.pendingResume || this.getPlaybackRecord();
             if (consume) this.pendingResume = null;
-            return record && String(record.itemId) === String(itemId) && Number.isFinite(record.position) ? record.position : 0;
+            return record && String(record.itemId) === String(itemId) && Number.isFinite(record.position) ? record.position : fallback;
         }
 
         savePlaybackProgress(videoData, videoEl, force = false) {

@@ -4,6 +4,83 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 
 for (const lang of ['zh', 'en']) {
+    test(`${lang}: resumes a video after reload and clears its position when it finishes`, () => {
+        const saved = new Map();
+        const slots = {};
+        const context = {
+            window: {}, console, setTimeout, clearTimeout,
+            document: { getElementById: id => slots[id] },
+            localStorage: {
+                getItem: key => saved.get(key) ?? null,
+                setItem: (key, value) => saved.set(key, value)
+            }
+        };
+        vm.runInNewContext(fs.readFileSync(`${lang}/js/player.js`, 'utf8'), context);
+        const item = { Id: 'clip', UserData: { PlaybackPositionTicks: 120000000 } };
+        const app = {
+            config: { server: 'http://media', userId: 'account' },
+            state: { viewMode: 'stream', currentIndex: 0, videos: [item] },
+            toggleLoading() {}
+        };
+        const load = () => {
+            const player = new context.window.VideoPlayer({ app });
+            const playedAt = [];
+            const video = {
+                dataset: {}, style: { opacity: '0' }, readyState: 0, duration: NaN,
+                time: 0, paused: true, seeking: false,
+                get currentTime() { return this.time; },
+                set currentTime(position) { this.time = position; this.seeking = true; },
+                canPlayType: () => '', load() {}, pause() {},
+                play() { playedAt.push(this.time); }
+            };
+            slots['video-p0'] = video;
+            player.setVideoSource(video, 'movie.mp4', 0, item, { autoplay: true });
+            player.bindVideoEvents(video, 0, item);
+            return { player, video, playedAt };
+        };
+        const start = ({ video, playedAt }, position) => {
+            assert.equal(video.autoplay, false);
+            video.readyState = 3;
+            video.duration = 100;
+            video.oncanplay();
+            assert.equal(video.currentTime, position);
+            assert.equal(video.style.opacity, '0');
+            assert.deepEqual(playedAt, []);
+            video.seeking = false;
+            video.onseeked();
+            assert.deepEqual(playedAt, [position]);
+            video.onplaying();
+            assert.equal(video.style.opacity, '1');
+        };
+
+        const first = load();
+        start(first, 12);
+        first.video.time = 37;
+        first.video.onpause();
+
+        const second = load();
+        start(second, 37);
+        first.video.time = 0;
+        first.video.onpause();
+        assert.equal(second.player.getResumePosition(item), 37);
+        assert.equal(second.player.getResumePosition({ Id: 'other' }), 0);
+
+        app.config.userId = 'other-account';
+        assert.equal(second.player.getResumePosition(item), 12);
+        app.config.userId = 'account';
+        app.config.server = 'http://another-server';
+        assert.equal(second.player.getResumePosition(item), 12);
+        app.config.server = 'http://media';
+
+        second.video.ended = true;
+        second.video.time = 100;
+        second.video.onended();
+        const replay = load();
+        assert.equal(replay.player.getResumePosition(item), 0);
+        assert.equal(replay.video.autoplay, true);
+        assert.equal(replay.video.dataset.resumeTime, undefined);
+    });
+
     test(`${lang}: old video events cannot change playback or report another item`, () => {
         const requests = [];
         const slots = {};

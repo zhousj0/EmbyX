@@ -1681,7 +1681,7 @@
 
                 if (!videoEl || !videoData) return;
 
-                const resumeTime = this.drama.isDramaMode() ? this.drama.getResumePosition(videoData.Id) : 0;
+                const resumeTime = this.player.getResumePosition(videoData, true);
                 const src = this.getVideoSrc(videoData.Id, videoData, true);
                 this.setVideoSource(videoEl, src, index, videoData, { autoplay: true, resumeTime });
 

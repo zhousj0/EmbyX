@@ -151,8 +151,7 @@
                     } else if (!videoData.IsFolder && videoData.Type !== 'Folder') {
                         const preloadSrc = this.app.player.getVideoSrc(videoData.Id, videoData, false);
                         this.app.player.setVideoSource(videoEl, preloadSrc, videoIdx, videoData, {
-                            preloadOnly: offset !== 0,
-                            resumeTime: offset === 0 && this.app.drama?.isDramaMode() ? this.app.drama.getResumePosition(videoData.Id, false) : 0
+                            preloadOnly: offset !== 0
                         });
                     }
 
