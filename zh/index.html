@@ -1554,6 +1554,7 @@
                     if (keepCurrent && this.state.videos.length > 0) {
                         this._applyQueueKeepingCurrent(items);
                     } else {
+                        this.player?.resetPlaybackRound();
                         this.state.videos = items;
                         this.state.currentIndex = 0;
                     }
@@ -1572,7 +1573,7 @@
                         }
                     }
 
-                    // 短剧模式：尝试从本地恢复进度
+                    // 短剧模式：定位上次观看的集数
                     if (isDramaMode && items.length > 0 && this.state.currentLibraryId) {
                         const lastId = this.drama.lastFocusedEpisodeId || this.drama.getPlaybackRecord()?.itemId;
                         if (lastId) {
@@ -1681,9 +1682,8 @@
 
                 if (!videoEl || !videoData) return;
 
-                const resumeTime = this.player.getResumePosition(videoData, true);
                 const src = this.getVideoSrc(videoData.Id, videoData, true);
-                this.setVideoSource(videoEl, src, index, videoData, { autoplay: true, resumeTime });
+                this.setVideoSource(videoEl, src, index, videoData, { autoplay: true });
 
                 // 同步全局静音状态（精准更新 SVG）
                 videoEl.muted = this.state.isMuted;
@@ -1870,7 +1870,7 @@
                 localStorage.setItem(`emby_last_id_${cloud.libId}`, cloud.lastId);
                 localStorage.setItem(`emby_last_date_${cloud.libId}`, cloud.date);
                 this.state._pendingSyncItem = null;
-                const restored = await this.drama.restorePlayback({ itemId: String(cloud.lastId), position: null, date: cloud.date, path: [], startIndex: 0 });
+                const restored = await this.drama.restorePlayback({ itemId: String(cloud.lastId), date: cloud.date, path: [], startIndex: 0 });
                 if (restored) this.showToast('✅ 进度已同步');
                 else await this.fetchVideos(this.state.currentLibraryId);
             }
@@ -2585,11 +2585,10 @@
                     this.state.currentIndex = 0;
                     return;
                 }
-                const prefix = this.state.videos.slice(0, idx);
+                const prefix = this.state.videos.slice(0, idx + 1);
                 const seen = new Set(prefix.map(v => String(v.Id)));
-                seen.add(String(current.Id));
                 const rest = items.filter(v => !seen.has(String(v.Id)));
-                this.state.videos = [...prefix, current, ...rest];
+                this.state.videos.splice(idx + 1, this.state.videos.length - idx - 1, ...rest);
             }
 
             // 随机模式：原地洗牌 videos 数组，保持 currentIndex 不变
@@ -2634,7 +2633,8 @@
                         if (originalIndex >= 0 && originalIndex !== index) {
                             [ordered[originalIndex], ordered[index]] = [ordered[index], ordered[originalIndex]];
                         }
-                        this.state.videos = ordered;
+                        ordered.forEach((video, index) => { this.state.videos[index] = video; });
+                        this.state.videos.length = ordered.length;
                         this.state.originalVideos = [];
                     }
                     if (this.dom.slides) this.renderBuffer();
@@ -2754,7 +2754,8 @@
                     if (this.state.playMode !== 'random' && this.state.videos.length > PAGE_SIZE) {
                         const pageIndex = Math.floor(this.state.currentIndex / PAGE_SIZE);
                         const start = pageIndex * PAGE_SIZE;
-                        this.state.videos = this.state.videos.slice(start, start + PAGE_SIZE);
+                        const page = this.state.videos.slice(start, start + PAGE_SIZE);
+                        this.state.videos.splice(0, this.state.videos.length, ...page);
                         this.state.currentIndex = this.state.currentIndex % PAGE_SIZE;
                         this.state.startIndex = (this.state.startIndex || 0) + start;
                     }

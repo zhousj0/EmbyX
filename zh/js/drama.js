@@ -22,7 +22,6 @@
             this.lastFocusedEpisodeId = null; // 用于下钻后高亮定位上次观看集数
             this.seriesCountCache = {}; // 电视剧剧集真实总数缓存 { [seriesId]: count }
             this._fetchingSeriesCounts = new Set();
-            this.pendingResume = null;
             this._lastPlaybackSave = 0;
             this._lastPlaybackItem = null;
         }
@@ -665,7 +664,6 @@
             this.activePlayingFolderId = null;
             this.rootSiblings = [];
             this.lastFocusedEpisodeId = null;
-            this.pendingResume = null;
             this._lastPlaybackSave = 0;
             this._lastPlaybackItem = null;
         }
@@ -686,14 +684,8 @@
             }
         }
 
-        getResumePosition(itemId, consume = true, fallback = 0) {
-            const record = this.pendingResume || this.getPlaybackRecord();
-            if (consume) this.pendingResume = null;
-            return record && String(record.itemId) === String(itemId) && Number.isFinite(record.position) ? record.position : fallback;
-        }
-
-        savePlaybackProgress(videoData, videoEl, force = false) {
-            if (!this.isDramaMode() || !videoData || !videoEl || !this.app.state.currentLibraryId) return;
+        savePlaybackLocation(videoData, force = false) {
+            if (!this.isDramaMode() || !videoData || !this.app.state.currentLibraryId) return;
             const now = Date.now();
             if (!force && this._lastPlaybackItem === String(videoData.Id) && now - (this._lastPlaybackSave || 0) < 5000) return;
             const app = this.app;
@@ -706,7 +698,6 @@
             const previousDate = previous?.itemId === String(videoData.Id) ? previous.date : localStorage.getItem(`emby_last_date_${app.state.currentLibraryId}`);
             const record = {
                 itemId: String(videoData.Id),
-                position: videoEl.ended ? 0 : Math.max(0, videoEl.currentTime || 0),
                 date: (app._isFirstLoad && previousDate) || new Date(now).toISOString(),
                 path,
                 startIndex: app.state.startIndex || 0
@@ -742,7 +733,7 @@
             record = record || this.getPlaybackRecord();
             if (!record) {
                 const itemId = localStorage.getItem(`emby_last_id_${libraryId}`);
-                if (itemId) record = { itemId, position: null, path: [], startIndex: 0 };
+                if (itemId) record = { itemId, path: [], startIndex: 0 };
             }
             if (!record?.itemId) return false;
 
@@ -863,8 +854,6 @@
                 app.state.playMode = 'sequence';
                 this.lastFocusedEpisodeId = String(videoData.Id);
                 this.activePlayingFolderId = videoData.SeriesId || singleFolder?.Id || this.currentFolderId;
-                const position = Number.isFinite(record.position) ? record.position : ((videoData.UserData?.PlaybackPositionTicks || 0) / 10000000);
-                this.pendingResume = { itemId: String(videoData.Id), position: Math.max(0, position) };
                 app._isFirstLoad = true;
                 app.toggleViewMode();
                 return true;

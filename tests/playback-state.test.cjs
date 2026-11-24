@@ -4,8 +4,9 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 
 for (const lang of ['zh', 'en']) {
-    test(`${lang}: resumes a video after reload and clears its position when it finishes`, () => {
-        const saved = new Map();
+    test(`${lang}: resumes only videos watched in the current playback queue`, () => {
+        const legacyKey = 'embyx_playback_resume_["http://media","account","clip"]';
+        const saved = new Map([[legacyKey, '24']]);
         const slots = {};
         const context = {
             window: {}, console, setTimeout, clearTimeout,
@@ -17,68 +18,117 @@ for (const lang of ['zh', 'en']) {
         };
         vm.runInNewContext(fs.readFileSync(`${lang}/js/player.js`, 'utf8'), context);
         const item = { Id: 'clip', UserData: { PlaybackPositionTicks: 120000000 } };
+        const nextItem = { Id: 'next', UserData: { PlaybackPositionTicks: 160000000 } };
         const app = {
             config: { server: 'http://media', userId: 'account' },
-            state: { viewMode: 'stream', currentIndex: 0, videos: [item] },
+            state: { viewMode: 'stream', currentIndex: 0, videos: [item, nextItem] },
             toggleLoading() {}
         };
-        const load = () => {
-            const player = new context.window.VideoPlayer({ app });
+        const player = new context.window.VideoPlayer({ app });
+        const load = (index, activePlayer = player, reuse = null) => {
+            app.state.currentIndex = index;
+            const videoData = app.state.videos[index];
             const playedAt = [];
-            const video = {
+            const video = reuse ?? {
                 dataset: {}, style: { opacity: '0' }, readyState: 0, duration: NaN,
                 time: 0, paused: true, seeking: false,
                 get currentTime() { return this.time; },
                 set currentTime(position) { this.time = position; this.seeking = true; },
-                canPlayType: () => '', load() {}, pause() {},
-                play() { playedAt.push(this.time); }
+                canPlayType: () => '', pause() {},
+                load() {
+                    this.readyState = 0;
+                    this.duration = NaN;
+                    this.time = 0;
+                    this.seeking = false;
+                    this.ended = false;
+                }
             };
-            slots['video-p0'] = video;
-            player.setVideoSource(video, 'movie.mp4', 0, item, { autoplay: true });
-            player.bindVideoEvents(video, 0, item);
-            return { player, video, playedAt };
+            video.style.opacity = '0';
+            video.play = () => { playedAt.push(video.time); };
+            slots[`video-p${index % 3}`] = video;
+            activePlayer.setVideoSource(video, `${videoData.Id}.mp4`, index, videoData, { autoplay: true });
+            activePlayer.bindVideoEvents(video, index, videoData);
+            return { video, playedAt };
         };
         const start = ({ video, playedAt }, position) => {
-            assert.equal(video.autoplay, false);
+            assert.equal(video.autoplay, position === 0);
             video.readyState = 3;
             video.duration = 100;
             video.oncanplay();
             assert.equal(video.currentTime, position);
-            assert.equal(video.style.opacity, '0');
-            assert.deepEqual(playedAt, []);
-            video.seeking = false;
-            video.onseeked();
+            if (position > 0) {
+                assert.equal(video.style.opacity, '0');
+                assert.deepEqual(playedAt, []);
+                video.seeking = false;
+                video.onseeked();
+            }
             assert.deepEqual(playedAt, [position]);
             video.onplaying();
             assert.equal(video.style.opacity, '1');
         };
 
-        const first = load();
-        start(first, 12);
+        const first = load(0);
+        start(first, 0);
         first.video.time = 37;
         first.video.onpause();
 
-        const second = load();
-        start(second, 37);
+        const next = load(1);
+        start(next, 0);
+        next.video.time = 22;
+        next.video.onpause();
+        assert.equal(first.video.currentTime, 0);
+        start(load(0, player, first.video), 37);
+        start(load(1, player, next.video), 22);
+
+        app.state.videos.push({ Id: 'appended' }, { Id: 'last' });
+        const last = load(3);
+        start(last, 0);
+        last.video.time = 61;
+        last.video.onpause();
+
+        const previous = load(0);
+        start(previous, 37);
         first.video.time = 0;
         first.video.onpause();
-        assert.equal(second.player.getResumePosition(item), 37);
-        assert.equal(second.player.getResumePosition({ Id: 'other' }), 0);
+        start(load(3), 61);
+        start(load(1), 22);
+        const previousAgain = load(0);
+        start(previousAgain, 37);
+        previousAgain.video.ended = true;
+        previousAgain.video.time = 100;
+        previousAgain.video.onended();
 
-        app.config.userId = 'other-account';
-        assert.equal(second.player.getResumePosition(item), 12);
-        app.config.userId = 'account';
-        app.config.server = 'http://another-server';
-        assert.equal(second.player.getResumePosition(item), 12);
-        app.config.server = 'http://media';
+        const replay = load(0);
+        start(replay, 0);
+        replay.video.time = 56;
+        replay.video.onpause();
+        app.state.videos = [item, nextItem];
+        replay.video.onpause();
+        const refreshed = load(0);
+        start(refreshed, 0);
+        refreshed.video.time = 43;
+        refreshed.video.onpause();
 
-        second.video.ended = true;
-        second.video.time = 100;
-        second.video.onended();
-        const replay = load();
-        assert.equal(replay.player.getResumePosition(item), 0);
-        assert.equal(replay.video.autoplay, true);
-        assert.equal(replay.video.dataset.resumeTime, undefined);
+        const reopenedPlayer = new context.window.VideoPlayer({ app });
+        start(load(0, reopenedPlayer), 0);
+        assert.deepEqual([...saved], [[legacyKey, '24']]);
+
+        const folderListing = [item, nextItem];
+        app.drama = { _folderPlayback: { videos: folderListing }, savePlaybackLocation() {} };
+        app.state.videos = [...folderListing];
+        const folderVideo = load(0);
+        start(folderVideo, 0);
+        folderVideo.video.time = 45;
+        folderVideo.video.onpause();
+
+        // Returning to the folder grid and choosing a video builds a new queue.
+        app.state.videos = folderListing;
+        app.drama._folderPlayback = null;
+        app.drama._folderPlayback = { videos: folderListing };
+        app.state.videos = [nextItem, item];
+        start(load(1), 45);
+        player.resetPlaybackRound();
+        start(load(1), 0);
     });
 
     test(`${lang}: old video events cannot change playback or report another item`, () => {
@@ -131,11 +181,13 @@ for (const lang of ['zh', 'en']) {
         const App = vm.runInNewContext(`(class { ${html.slice(start, end)} })`, context);
         const app = new App();
         let renders = 0;
+        let roundResets = 0;
         Object.assign(app, {
             config: { server: 'http://media', token: 'test', userId: 'user' },
             state: { currentLibraryId: 'lib', viewMode: 'grid', playMode: 'sequence', videos: [] },
             toggleLoading() {}, getAuthHeaders: () => ({}),
             showToast() { throw new Error('stale request showed an error'); },
+            player: { resetPlaybackRound() { roundResets++; } },
             renderGridView() { renders++; }
         });
         app.state.searchTerm = 'old';
@@ -148,6 +200,7 @@ for (const lang of ['zh', 'en']) {
         await old;
         assert.equal(app.state.videos[0].Id, 'new');
         assert.equal(renders, 1);
+        assert.equal(roundResets, 1);
         const staleFailure = app.fetchVideos();
         const current = app.fetchVideos();
         pending[3].resolve({ ok: true, json: async () => ({ Items: [{ Id: 'current' }], TotalRecordCount: 1 }) });
@@ -155,5 +208,6 @@ for (const lang of ['zh', 'en']) {
         pending[2].reject(new Error('old network failure'));
         await staleFailure;
         assert.equal(app.state.videos[0].Id, 'current');
+        assert.equal(roundResets, 2);
     });
 }

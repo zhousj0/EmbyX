@@ -185,6 +185,7 @@
             const curV = document.getElementById(`video-p${slideIdx}`);
             if (curV) {
                 this.app.player.savePlaybackProgress(curV, true);
+                delete curV.dataset.playbackStarted;
                 curV.pause();
                 if (this.app.player.activeMpegts) {
                     this.app.player.activeMpegts.destroy();
